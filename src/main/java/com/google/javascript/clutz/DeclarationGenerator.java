@@ -294,6 +294,8 @@ class DeclarationGenerator {
    */
   private final Set<String> typesUsed = new LinkedHashSet<>();
 
+  private final Map<String, String> importRenameMap = new HashMap<>();
+
   DeclarationGenerator(Options opts) {
     this.opts = opts;
     this.compiler = new Compiler();
@@ -399,10 +401,108 @@ class DeclarationGenerator {
     }
   }
 
+  private boolean isGoogCall(Node node) {
+    if (!node.isCall()) {
+      return false;
+    }
+
+    if (node.getFirstChild() == null || !node.getFirstChild().isGetProp()) {
+      return false;
+    }
+
+    Node getPropNode = node.getFirstChild();
+
+    if (getPropNode.getFirstChild() == null || !getPropNode.getFirstChild().isName()) {
+      return false;
+    }
+
+    return getPropNode.getFirstChild().getString().equals("goog");
+  }
+
+  private boolean isGoogRequire(Node node) {
+    if (!isGoogCall(node)) {
+      return false;
+    }
+
+    if (node.getFirstChild() == null) {
+      return false;
+    }
+
+    Node getPropNode = node.getFirstChild();
+
+    if (getPropNode.getChildAtIndex(1) == null || !getPropNode.getChildAtIndex(1).isString()) {
+      return false;
+    }
+    return getPropNode.getChildAtIndex(1).getString().equals("require");
+  }
+
+  private boolean isGoogModule(Node node) {
+    if (!isGoogCall(node)) {
+      return false;
+    }
+    if (node.getFirstChild() == null) {
+      return false;
+    }
+    Node getPropNode = node.getFirstChild();
+    if (getPropNode.getChildAtIndex(1) == null || !getPropNode.getChildAtIndex(1).isString()) {
+      return false;
+    }
+    return getPropNode.getChildAtIndex(1).getString().equals("module");
+  }
+
+  private boolean isGoogRequireAssignment(Node node) {
+    if (!(node.isConst() || node.isVar() || node.isLet())) {
+      return false;
+    }
+
+    if (node.getFirstFirstChild() == null) {
+      return false;
+    }
+
+    return isGoogRequire(node.getFirstFirstChild());
+  }
+
+  private String getGoogModuleId(Node node) {
+    if (isGoogModule(node)) {
+      return node.getChildAtIndex(1).getString();
+    }
+    for (Node child : node.children()) {
+      String moduleId = getGoogModuleId(child);
+      if (moduleId != null) {
+        return moduleId;
+      }
+    }
+    return null;
+  }
+
+  private Map<String, String> getImportRenameMap(String moduleId, Node node) {
+    Map<String, String> importRenameMap = new HashMap<>();
+    if (isGoogRequireAssignment(node)) {
+      String variableName = node.getFirstChild().getString();
+      String importingModuleId = node.getFirstFirstChild().getChildAtIndex(1).getString();
+      importRenameMap.put(
+          "module$contents$" + moduleId.replace(".", "$") + "_" + variableName,
+          "module$exports$" + importingModuleId.replace(".", "$") + "_" + variableName);
+    }
+    for (Node child : node.children()) {
+      importRenameMap.putAll(getImportRenameMap(moduleId, child));
+    }
+
+    return importRenameMap;
+  }
+
   String generateDeclarations(
       List<SourceFile> sourceFiles, List<SourceFile> externs, Depgraph depgraph)
       throws AssertionError {
     // Compile should always be first here, because it sets internal state.
+    compiler.initOptions(opts.getCompilerOptions());
+    for (SourceFile sf : sourceFiles) {
+      Node ast = compiler.parse(sf);
+      String moduleId = getGoogModuleId(ast);
+      if (moduleId != null) {
+        importRenameMap.putAll(getImportRenameMap(moduleId, ast));
+      }
+    }
     compiler.compile(externs, sourceFiles, opts.getCompilerOptions());
     unknownType = compiler.getTypeRegistry().getNativeType(JSTypeNative.UNKNOWN_TYPE);
     numberType = compiler.getTypeRegistry().getNativeType(JSTypeNative.NUMBER_TYPE);
@@ -1669,6 +1769,9 @@ class DeclarationGenerator {
         return;
       }
       String displayName = type.getDisplayName();
+      if (importRenameMap.containsKey(displayName)) {
+        displayName = importRenameMap.get(displayName);
+      }
       emit(Constants.INTERNAL_NAMESPACE + "." + displayName);
       List<JSType> templateTypes = nType.getTemplateTypes();
       if (templateTypes != null && templateTypes.size() > 0) {

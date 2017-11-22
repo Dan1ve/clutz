@@ -1,4 +1,4 @@
-goog.module('mising.extend');
+goog.module('missing.extend');
 
 //!! Using class syntax requires default externs but the test runs faster
 //!! without them. Just use @constructor instead.
@@ -28,6 +28,18 @@ function D() {
 
 }
 
+/**
+ * @param {C!} c
+ */
+function E(c) {
+
+}
+
+/** @type {C} */
+const F = null;
+
 exports.B = B;
 exports.BTemplated = BTemplated;
 exports.D = D;
+exports.E = E;
+exports.F = F;
